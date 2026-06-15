@@ -1,0 +1,148 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum FixtureStatus {
+  UPCOMING
+  LIVE
+  FINISHED
+  POSTPONED
+  CANCELLED
+}
+
+enum BidType {
+  RESULT
+  SCORE
+}
+
+enum BidStatus {
+  PENDING
+  WON
+  LOST
+  VOID
+}
+
+enum TokenEntryType {
+  INITIAL_BONUS
+  BID_COST
+  RESULT_WIN
+  SCORE_WIN
+  ADJUSTMENT
+}
+
+model User {
+  id             String        @id @default(cuid())
+  username       String        @unique
+  displayName    String?
+  passwordHash   String
+  startingTokens Int           @default(1000)
+  currentTokens  Int           @default(1000)
+  isAdmin       Boolean       @default(false)
+
+  bids          Bid[]
+  tokenLedger   TokenLedger[]
+
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@index([currentTokens])
+}
+
+model Fixture {
+  id                String         @id @default(cuid())
+  externalFixtureId  String         @unique
+  competition        String         @default("World Cup 2026")
+  stage             String?
+  homeTeam          String
+  awayTeam          String
+  kickoffAt         DateTime
+  status            FixtureStatus   @default(UPCOMING)
+
+  homeScore        Int?
+  awayScore        Int?
+  winner           String?
+
+  sourceProvider    String?
+  sourceUpdatedAt   DateTime?
+  lastSyncedAt     DateTime?
+
+  bids             Bid[]
+  tokenLedger      TokenLedger[]
+
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  @@index([kickoffAt])
+  @@index([status])
+}
+
+model Bid {
+  id                    String      @id @default(cuid())
+  userId                String
+  fixtureId             String
+  bidType               BidType
+
+  predictedResult       String?
+  predictedHomeScore    Int?
+  predictedAwayScore    Int?
+
+  costTokens            Int         @default(10)
+  status                BidStatus   @default(PENDING)
+
+  placedAt              DateTime    @default(now())
+  lockedAt              DateTime?
+  settledAt             DateTime?
+
+  user                  User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fixture               Fixture     @relation(fields: [fixtureId], references: [id], onDelete: Cascade)
+  tokenEntries          TokenLedger[]
+
+  createdAt             DateTime    @default(now())
+  updatedAt             DateTime    @updatedAt
+
+  @@unique([userId, fixtureId, bidType])
+  @@index([fixtureId])
+  @@index([userId])
+  @@index([status])
+}
+
+model TokenLedger {
+  id            String          @id @default(cuid())
+  userId        String
+  fixtureId     String?
+  bidId         String?
+  entryType     TokenEntryType
+  amount        Int
+  balanceAfter  Int
+  note          String?
+
+  user          User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  fixture       Fixture?        @relation(fields: [fixtureId], references: [id], onDelete: SetNull)
+  bid           Bid?            @relation(fields: [bidId], references: [id], onDelete: SetNull)
+
+  createdAt     DateTime        @default(now())
+
+  @@index([userId])
+  @@index([fixtureId])
+  @@index([bidId])
+  @@index([createdAt])
+}
+
+model FixtureSyncLog {
+  id             String    @id @default(cuid())
+  providerName   String
+  syncedAt       DateTime  @default(now())
+  success        Boolean
+  message        String?
+  rawPayload     Json?
+
+  createdAt      DateTime  @default(now())
+
+  @@index([syncedAt])
+  @@index([success])
+}
