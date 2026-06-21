@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
+import { formatTournamentCutoffHkt, getTournamentCutoffDate } from '@/lib/tournament';
 
 type Health = { ok: boolean; service: string };
 type LeaderboardEntry = { id: string; nickname: string; currentTokens: number; rank: number };
@@ -56,8 +57,6 @@ const emptyDraft = (): Draft => ({
   predictedAwayScore: '',
 });
 
-const TOURNAMENT_CUTOFF = new Date('2026-07-20T16:00:00.000Z'); // 2026-07-21 00:00 GMT+8
-
 async function requestJson<T>(url: string, init?: RequestInit) {
   const response = await fetch(url, {
     ...init,
@@ -95,6 +94,25 @@ function bidLabel(bid: Bid) {
   return `Score: ${bid.predictedHomeScore ?? '-'}-${bid.predictedAwayScore ?? '-'}`;
 }
 
+function hktDateKey(dateString: string) {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Hong_Kong',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+
+  const parts = formatter.formatToParts(new Date(dateString));
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? '';
+  return `${get('year')}-${get('month')}-${get('day')}`;
+}
+
+function addDaysKey(baseDate: Date, days: number) {
+  const shifted = new Date(baseDate);
+  shifted.setUTCDate(shifted.getUTCDate() + days);
+  return hktDateKey(shifted.toISOString());
+}
+
 export default function Page() {
   const [health, setHealth] = useState<Health | null>(null);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
@@ -106,6 +124,8 @@ export default function Page() {
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [authForm, setAuthForm] = useState({ username: '', displayName: '', password: '' });
   const [bidDrafts, setBidDrafts] = useState<Record<string, Draft>>({});
+  const [showOlderFinalScores, setShowOlderFinalScores] = useState(false);
+  const [showLaterUpcomingFixtures, setShowLaterUpcomingFixtures] = useState(false);
 
   const refreshAll = useCallback(
     async (authToken?: string | null) => {
@@ -152,13 +172,178 @@ export default function Page() {
     void refreshAll(saved);
   }, [refreshAll]);
 
-  const tournamentEnded = Date.now() >= TOURNAMENT_CUTOFF.getTime();
-  const upcomingFixtures = useMemo(
-    () => fixtures.filter((fixture) => fixture.status === 'UPCOMING' || new Date(fixture.kickoffAt).getTime() > Date.now()),
+  const tournamentEnded = Date.now() >= getTournamentCutoffDate().getTime();
+  const todayKey = hktDateKey(new Date().toISOString());
+  const tomorrowKey = addDaysKey(new Date(), 1);
+  const yesterdayKey = addDaysKey(new Date(), -1);
+
+  const liveFixtures = useMemo(
+    () => fixtures.filter((fixture) => fixture.status === 'LIVE').sort((a, b) => new Date(a.kickoffAt).getTime() - new Date(b.kickoffAt).getTime()),
     [fixtures],
   );
-  const finishedFixtures = useMemo(() => fixtures.filter((fixture) => fixture.status === 'FINISHED'), [fixtures]);
+  const finishedFixtures = useMemo(
+    () => fixtures.filter((fixture) => fixture.status === 'FINISHED').sort((a, b) => new Date(b.kickoffAt).getTime() - new Date(a.kickoffAt).getTime()),
+    [fixtures],
+  );
+  const upcomingFixtures = useMemo(
+    () => fixtures.filter((fixture) => fixture.status === 'UPCOMING').sort((a, b) => new Date(a.kickoffAt).getTime() - new Date(b.kickoffAt).getTime()),
+    [fixtures],
+  );
+
+  const visibleFinalFixtures = finishedFixtures.filter((fixture) => {
+    const key = hktDateKey(fixture.kickoffAt);
+    return key === yesterdayKey || key === todayKey;
+  });
+  const hiddenFinalFixtures = finishedFixtures.filter((fixture) => {
+    const key = hktDateKey(fixture.kickoffAt);
+    return key !== yesterdayKey && key !== todayKey;
+  });
+
+  const visibleUpcomingFixtures = upcomingFixtures.filter((fixture) => {
+    const key = hktDateKey(fixture.kickoffAt);
+    return key === todayKey || key === tomorrowKey;
+  });
+  const hiddenUpcomingFixtures = upcomingFixtures.filter((fixture) => {
+    const key = hktDateKey(fixture.kickoffAt);
+    return key !== todayKey && key !== tomorrowKey;
+  });
+
   const sortedLeaderboard = useMemo(() => [...leaderboard].sort((a, b) => a.rank - b.rank), [leaderboard]);
+
+  const renderFixtureCard = (fixture: Fixture, allowBids: boolean) => {
+    const draft = bidDrafts[fixture.id] ?? emptyDraft();
+    const canBid = allowBids && fixture.status === 'UPCOMING' && new Date(fixture.kickoffAt).getTime() > Date.now();
+
+    return (
+      <article
+        key={fixture.id}
+        style={{
+          padding: 16,
+          borderRadius: 18,
+          background: 'rgba(30, 41, 59, 0.9)',
+          border: '1px solid rgba(148, 163, 184, 0.14)',
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontWeight: 800, fontSize: 18 }}>
+              {fixture.homeTeam} vs {fixture.awayTeam}
+            </div>
+            <div style={{ color: '#94a3b8', fontSize: 13 }}>
+              {fixture.competition}{fixture.stage ? ` Â· ${fixture.stage}` : ''}
+            </div>
+          </div>
+          <div style={{ textAlign: 'right', color: '#cbd5e1' }}>
+            <div>{fixture.status}</div>
+            <div style={{ fontSize: 13 }}>{formatHKT(fixture.kickoffAt)}</div>
+          </div>
+        </div>
+
+        <div style={{ marginTop: 12, color: '#e2e8f0' }}>
+          {fixture.homeScore != null && fixture.awayScore != null
+            ? fixture.status === 'LIVE'
+              ? `Live score: ${fixture.homeScore}-${fixture.awayScore}`
+              : `Final score: ${fixture.homeScore}-${fixture.awayScore}`
+            : fixture.status === 'LIVE'
+              ? 'Live score not available yet'
+              : 'Score not available yet'}
+        </div>
+
+        {fixture.myBids && fixture.myBids.length > 0 && (
+          <div style={{ marginTop: 14, padding: 14, borderRadius: 14, background: 'rgba(15, 23, 42, 0.85)' }}>
+            <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 8 }}>Your bids</div>
+            <div style={{ display: 'grid', gap: 8 }}>
+              {fixture.myBids.map((bid) => (
+                <div key={bid.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+                  <span>{bidLabel(bid)}</span>
+                  <span style={{ color: statusColor(bid.status) }}>{bid.status}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {me && canBid && (
+          <div style={{ marginTop: 14, display: 'grid', gap: 12 }}>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {(['RESULT', 'SCORE'] as const).map((mode) => (
+                <button
+                  key={mode}
+                  onClick={() =>
+                    setBidDrafts((current) => ({
+                      ...current,
+                      [fixture.id]: { ...(current[fixture.id] ?? emptyDraft()), bidType: mode },
+                    }))
+                  }
+                  style={{
+                    ...pillButton,
+                    background: draft.bidType === mode ? '#f59e0b' : 'rgba(15, 23, 42, 0.95)',
+                    color: draft.bidType === mode ? '#111827' : '#e2e8f0',
+                  }}
+                >
+                  {mode}
+                </button>
+              ))}
+            </div>
+
+            {draft.bidType === 'RESULT' ? (
+              <select
+                value={draft.predictedResult}
+                onChange={(e) =>
+                  setBidDrafts((current) => ({
+                    ...current,
+                    [fixture.id]: { ...(current[fixture.id] ?? emptyDraft()), predictedResult: e.target.value as ResultPrediction },
+                  }))
+                }
+                style={inputStyle}
+              >
+                <option value="HOME">Home win</option>
+                <option value="DRAW">Draw</option>
+                <option value="AWAY">Away win</option>
+              </select>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
+                <input
+                  type="number"
+                  min="0"
+                  value={draft.predictedHomeScore}
+                  onChange={(e) =>
+                    setBidDrafts((current) => ({
+                      ...current,
+                      [fixture.id]: { ...(current[fixture.id] ?? emptyDraft()), predictedHomeScore: e.target.value },
+                    }))
+                  }
+                  placeholder="Home score"
+                  style={inputStyle}
+                />
+                <input
+                  type="number"
+                  min="0"
+                  value={draft.predictedAwayScore}
+                  onChange={(e) =>
+                    setBidDrafts((current) => ({
+                      ...current,
+                      [fixture.id]: { ...(current[fixture.id] ?? emptyDraft()), predictedAwayScore: e.target.value },
+                    }))
+                  }
+                  placeholder="Away score"
+                  style={inputStyle}
+                />
+              </div>
+            )}
+
+            <button
+              onClick={() => void placeBid(fixture.id)}
+              disabled={busy === fixture.id}
+              style={{ ...primaryButton, opacity: busy === fixture.id ? 0.75 : 1 }}
+            >
+              {busy === fixture.id ? 'Placingâ€¦' : 'Place 10-token bid'}
+            </button>
+          </div>
+        )}
+      </article>
+    );
+  };
 
   async function submitAuth() {
     setBusy('auth');
@@ -183,12 +368,20 @@ export default function Page() {
       setToken(data.token);
       setMe(data.user);
       setMessage(`Signed in as ${data.user.displayName || data.user.username}`);
-      await refreshAll(data.token);
+      void refreshAll(data.token);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Authentication failed');
     } finally {
       setBusy(null);
     }
+  }
+
+  async function logout() {
+    window.localStorage.removeItem('world-cup-token');
+    setToken(null);
+    setMe(null);
+    setMessage('Signed out.');
+    await refreshAll(null);
   }
 
   async function placeBid(fixtureId: string) {
@@ -297,6 +490,9 @@ export default function Page() {
                   <StatCard label="Tokens" value={money(me.currentTokens)} />
                   <StatCard label="Role" value={me.isAdmin ? 'Admin' : 'Player'} />
                 </div>
+                <button onClick={() => void logout()} style={secondaryButton}>
+                  Log out
+                </button>
               </div>
             ) : (
               <div style={{ display: 'grid', gap: 12 }}>
@@ -334,6 +530,11 @@ export default function Page() {
                 >
                   Switch to {authMode === 'login' ? 'register' : 'login'}
                 </button>
+                {authMode === 'register' && (
+                  <div style={{ fontSize: 13, color: '#94a3b8', lineHeight: 1.5 }}>
+                    Passwords must be at least 8 characters long.
+                  </div>
+                )}
                 <div style={{ fontSize: 13, color: '#94a3b8' }}>
                   Demo seed password is often <code>password123</code> if the repo was seeded that way.
                 </div>
@@ -375,183 +576,65 @@ export default function Page() {
         </section>
 
         <section style={cardStyle}>
-          <h2 style={{ marginTop: 0 }}>Fixtures and bids</h2>
-          <div style={{ display: 'grid', gap: 16 }}>
-            {fixtures.map((fixture) => {
-              const draft = bidDrafts[fixture.id] ?? emptyDraft();
-              const canBid = fixture.status === 'UPCOMING' && new Date(fixture.kickoffAt).getTime() > Date.now();
-
-              return (
-                <article
-                  key={fixture.id}
-                  style={{
-                    padding: 16,
-                    borderRadius: 18,
-                    background: 'rgba(30, 41, 59, 0.9)',
-                    border: '1px solid rgba(148, 163, 184, 0.14)',
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-                    <div>
-                      <div style={{ fontWeight: 800, fontSize: 18 }}>
-                        {fixture.homeTeam} vs {fixture.awayTeam}
-                      </div>
-                      <div style={{ color: '#94a3b8', fontSize: 13 }}>
-                        {fixture.competition}{fixture.stage ? ` Â· ${fixture.stage}` : ''}
-                      </div>
-                    </div>
-                    <div style={{ textAlign: 'right', color: '#cbd5e1' }}>
-                      <div>{fixture.status}</div>
-                      <div style={{ fontSize: 13 }}>{formatHKT(fixture.kickoffAt)}</div>
-                    </div>
-                  </div>
-
-                  <div style={{ marginTop: 12, color: '#e2e8f0' }}>
-                    {fixture.homeScore != null && fixture.awayScore != null
-                      ? `Final score: ${fixture.homeScore}-${fixture.awayScore}`
-                      : 'Score not available yet'}
-                  </div>
-
-                  {fixture.myBids && fixture.myBids.length > 0 && (
-                    <div style={{ marginTop: 14, padding: 14, borderRadius: 14, background: 'rgba(15, 23, 42, 0.85)' }}>
-                      <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 8 }}>Your bids</div>
-                      <div style={{ display: 'grid', gap: 8 }}>
-                        {fixture.myBids.map((bid) => (
-                          <div key={bid.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-                            <span>{bidLabel(bid)}</span>
-                            <span style={{ color: statusColor(bid.status) }}>{bid.status}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {me && canBid && (
-                    <div style={{ marginTop: 14, display: 'grid', gap: 12 }}>
-                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                        {(['RESULT', 'SCORE'] as const).map((mode) => (
-                          <button
-                            key={mode}
-                            onClick={() =>
-                              setBidDrafts((current) => ({
-                                ...current,
-                                [fixture.id]: { ...(current[fixture.id] ?? emptyDraft()), bidType: mode },
-                              }))
-                            }
-                            style={{
-                              ...pillButton,
-                              background: draft.bidType === mode ? '#f59e0b' : 'rgba(15, 23, 42, 0.95)',
-                              color: draft.bidType === mode ? '#111827' : '#e2e8f0',
-                            }}
-                          >
-                            {mode}
-                          </button>
-                        ))}
-                      </div>
-
-                      {draft.bidType === 'RESULT' ? (
-                        <select
-                          value={draft.predictedResult}
-                          onChange={(e) =>
-                            setBidDrafts((current) => ({
-                              ...current,
-                              [fixture.id]: { ...(current[fixture.id] ?? emptyDraft()), predictedResult: e.target.value as ResultPrediction },
-                            }))
-                          }
-                          style={inputStyle}
-                        >
-                          <option value="HOME">Home win</option>
-                          <option value="DRAW">Draw</option>
-                          <option value="AWAY">Away win</option>
-                        </select>
-                      ) : (
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
-                          <input
-                            type="number"
-                            min="0"
-                            value={draft.predictedHomeScore}
-                            onChange={(e) =>
-                              setBidDrafts((current) => ({
-                                ...current,
-                                [fixture.id]: { ...(current[fixture.id] ?? emptyDraft()), predictedHomeScore: e.target.value },
-                              }))
-                            }
-                            placeholder="Home score"
-                            style={inputStyle}
-                          />
-                          <input
-                            type="number"
-                            min="0"
-                            value={draft.predictedAwayScore}
-                            onChange={(e) =>
-                              setBidDrafts((current) => ({
-                                ...current,
-                                [fixture.id]: { ...(current[fixture.id] ?? emptyDraft()), predictedAwayScore: e.target.value },
-                              }))
-                            }
-                            placeholder="Away score"
-                            style={inputStyle}
-                          />
-                        </div>
-                      )}
-
-                      <button
-                        onClick={() => void placeBid(fixture.id)}
-                        disabled={busy === fixture.id}
-                        style={{ ...primaryButton, opacity: busy === fixture.id ? 0.75 : 1 }}
-                      >
-                        {busy === fixture.id ? 'Placingâ€¦' : 'Place 10-token bid'}
-                      </button>
-                    </div>
-                  )}
-                </article>
-              );
-            })}
-
-            {fixtures.length === 0 && <div style={{ color: '#94a3b8' }}>No fixtures yet.</div>}
+          <h2 style={{ marginTop: 0 }}>Live scores</h2>
+          <div style={{ display: 'grid', gap: 10 }}>
+            {liveFixtures.map((fixture) => renderFixtureCard(fixture, false))}
+            {liveFixtures.length === 0 && <div style={{ color: '#94a3b8' }}>No live matches right now.</div>}
           </div>
         </section>
 
         <section style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 20 }}>
           <section style={cardStyle}>
-            <h2 style={{ marginTop: 0 }}>{tournamentEnded ? 'Tournament ended' : 'Upcoming fixtures'}</h2>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+              <h2 style={{ marginTop: 0, marginBottom: 0 }}>Final scores</h2>
+              {hiddenFinalFixtures.length > 0 && (
+                <button
+                  onClick={() => setShowOlderFinalScores((current) => !current)}
+                  style={secondaryButton}
+                >
+                  {showOlderFinalScores ? 'Hide older final scores' : `Show older final scores (${hiddenFinalFixtures.length})`}
+                </button>
+              )}
+            </div>
+
+            <div style={{ display: 'grid', gap: 10, marginTop: 14 }}>
+              {visibleFinalFixtures.map((fixture) => renderFixtureCard(fixture, false))}
+              {showOlderFinalScores && hiddenFinalFixtures.map((fixture) => renderFixtureCard(fixture, false))}
+              {visibleFinalFixtures.length === 0 && hiddenFinalFixtures.length === 0 && (
+                <div style={{ color: '#94a3b8' }}>No final scores yet.</div>
+              )}
+            </div>
+          </section>
+
+          <section style={cardStyle}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+              <h2 style={{ marginTop: 0, marginBottom: 0 }}>{tournamentEnded ? 'Tournament ended' : 'Upcoming fixtures'}</h2>
+              {!tournamentEnded && hiddenUpcomingFixtures.length > 0 && (
+                <button
+                  onClick={() => setShowLaterUpcomingFixtures((current) => !current)}
+                  style={secondaryButton}
+                >
+                  {showLaterUpcomingFixtures ? 'Hide later upcoming fixtures' : `Show later upcoming fixtures (${hiddenUpcomingFixtures.length})`}
+                </button>
+              )}
+            </div>
+
             {tournamentEnded ? (
               <div style={{ color: '#cbd5e1', lineHeight: 1.7 }}>
-                World Cup 2026 finished on 20 Jul 2026, so there are no more upcoming fixtures to show.
+                World Cup 2026 finished on {formatTournamentCutoffHkt()}, so there are no more upcoming fixtures to show.
                 <div style={{ marginTop: 10, color: '#94a3b8', fontSize: 13 }}>
                   Scores are now final and token settlement is handled by the sync/settle flow.
                 </div>
               </div>
             ) : (
-              <div style={{ display: 'grid', gap: 10 }}>
-                {upcomingFixtures.slice(0, 8).map((fixture) => (
-                  <div key={fixture.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-                    <div>
-                      <div style={{ fontWeight: 700 }}>{fixture.homeTeam} vs {fixture.awayTeam}</div>
-                      <div style={{ fontSize: 13, color: '#94a3b8' }}>{fixture.stage || fixture.competition}</div>
-                    </div>
-                    <div style={{ fontSize: 13, color: '#cbd5e1' }}>{formatHKT(fixture.kickoffAt)}</div>
-                  </div>
-                ))}
+              <div style={{ display: 'grid', gap: 10, marginTop: 14 }}>
+                {visibleUpcomingFixtures.map((fixture) => renderFixtureCard(fixture, true))}
+                {showLaterUpcomingFixtures && hiddenUpcomingFixtures.map((fixture) => renderFixtureCard(fixture, true))}
+                {visibleUpcomingFixtures.length === 0 && hiddenUpcomingFixtures.length === 0 && (
+                  <div style={{ color: '#94a3b8' }}>No upcoming fixtures yet.</div>
+                )}
               </div>
             )}
-          </section>
-
-          <section style={cardStyle}>
-            <h2 style={{ marginTop: 0 }}>Finished fixtures</h2>
-            <div style={{ display: 'grid', gap: 10 }}>
-              {finishedFixtures.slice(0, 8).map((fixture) => (
-                <div key={fixture.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-                  <div>
-                    <div style={{ fontWeight: 700 }}>{fixture.homeTeam} vs {fixture.awayTeam}</div>
-                    <div style={{ fontSize: 13, color: '#94a3b8' }}>{fixture.stage || fixture.competition}</div>
-                  </div>
-                  <div style={{ fontSize: 13, color: '#cbd5e1' }}>
-                    {fixture.homeScore ?? '-'}-{fixture.awayScore ?? '-'}
-                  </div>
-                </div>
-              ))}
-            </div>
           </section>
         </section>
       </div>
