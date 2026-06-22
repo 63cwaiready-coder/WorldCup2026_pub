@@ -5,11 +5,12 @@ export async function GET(req: Request) {
   const limitParam = new URL(req.url).searchParams.get('limit');
   const limit = Math.min(Math.max(Number(limitParam ?? 50) || 50, 1), 50);
 
-  const players = await prisma.user.findMany({
-    orderBy: { currentTokens: 'desc' },
-    take: limit,
-    select: { id: true, displayName: true, currentTokens: true },
-  });
+  const players: Array<{ id: string; displayName: string | null; currentTokens: number }> =
+    await prisma.user.findMany({
+      orderBy: { currentTokens: 'desc' },
+      take: limit,
+      select: { id: true, displayName: true, currentTokens: true },
+    });
 
   let currentRank = 0;
   let previousTokens: number | null = null;
