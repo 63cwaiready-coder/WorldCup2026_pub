@@ -32,7 +32,7 @@ function resolveDatabaseUrl() {
 
 const databaseUrl = resolveDatabaseUrl();
 
-export const prisma =
+export const prisma: any =
   global.prisma ??
   new PrismaClient(
     databaseUrl
