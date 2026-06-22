@@ -5,6 +5,45 @@ declare global {
   var prisma: PrismaClient | undefined;
 }
 
-export const prisma = global.prisma ?? new PrismaClient();
+function resolveDatabaseUrl() {
+  const candidates = [
+    process.env.DATABASE_URL,
+    process.env.POSTGRES_PRISMA_URL,
+    process.env.POSTGRES_URL_NON_POOLING,
+    process.env.POSTGRES_URL,
+    process.env.NEON_DATABASE_URL,
+  ].filter(Boolean) as string[];
+
+  const rawUrl = candidates[0];
+  if (!rawUrl) return undefined;
+
+  try {
+    const url = new URL(rawUrl);
+    if (url.hostname.includes('neon.tech') && !url.searchParams.has('sslmode')) {
+      url.searchParams.set('sslmode', 'require');
+      return url.toString();
+    }
+  } catch {
+    // Keep the original string if it is not a valid URL parse target.
+  }
+
+  return rawUrl;
+}
+
+const databaseUrl = resolveDatabaseUrl();
+
+export const prisma =
+  global.prisma ??
+  new PrismaClient(
+    databaseUrl
+      ? {
+          datasources: {
+            db: {
+              url: databaseUrl,
+            },
+          },
+        }
+      : undefined,
+  );
 
 if (process.env.NODE_ENV !== 'production') global.prisma = prisma;
