@@ -18,7 +18,7 @@ export async function placeBid(params: {
   if (!fixture) throw new Error('Fixture not found');
   if (fixture.kickoffAt <= new Date()) throw new Error('Bidding is closed for this fixture');
 
-  return prisma.$transaction(async (tx) => {
+  return prisma.$transaction(async (tx: any) => {
     const user = await tx.user.findUnique({ where: { id: params.userId } });
     if (!user) throw new Error('User not found');
     if (user.currentTokens < 10) throw new Error('Insufficient tokens');
@@ -61,7 +61,7 @@ export async function settleFixture(fixtureId: string) {
   if (!fixture) throw new Error('Fixture not found');
   if (fixture.homeScore == null || fixture.awayScore == null) throw new Error('Fixture score not ready');
 
-  return prisma.$transaction(async (tx) => {
+  return prisma.$transaction(async (tx: any) => {
     for (const bid of fixture.bids) {
       if (bid.status !== 'PENDING') continue;
       const user = await tx.user.findUnique({ where: { id: bid.userId } });
