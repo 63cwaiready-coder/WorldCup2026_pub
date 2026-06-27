@@ -1,5 +1,5 @@
 import 'server-only';
-import { createRequire } from 'node:module';
+import { createRequire }S from 'node:module';
 import type { PrismaClient as PrismaClientType } from '@prisma/client';
 
 type DbLike = PrismaClientType & {
